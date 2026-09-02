@@ -11,7 +11,7 @@ defmodule SecretSanta.Exchanges do
   import Ecto.Query, warn: false
   alias SecretSanta.Repo
 
-  alias SecretSanta.Exchanges.{Exchange, Participant}
+  alias SecretSanta.Exchanges.{Exchange, Exclusion, Participant}
 
   ## Exchanges
 
@@ -103,6 +103,51 @@ defmodule SecretSanta.Exchanges do
     Participant.changeset(participant, attrs)
   end
 
+  ## Exclusions
+
+  @doc "Returns all exclusions of an exchange."
+  def list_exclusions(%Exchange{id: exchange_id}) do
+    Repo.all(from x in Exclusion, where: x.exchange_id == ^exchange_id, order_by: x.id)
+  end
+
+  @doc """
+  Records that `giver` must not draw `excluded`. One-directional: to also
+  stop `excluded` drawing `giver`, add the reverse explicitly.
+
+  Both participants must belong to `exchange`, which must be open. Returns
+  `{:error, :exchange_drawn}`, `{:error, :not_in_exchange}`, or
+  `{:error, changeset}` for a self-exclusion or duplicate.
+  """
+  def add_exclusion(%Exchange{} = exchange, %Participant{} = giver, %Participant{} = excluded) do
+    with :ok <- ensure_open(exchange),
+         :ok <- ensure_members(exchange, [giver, excluded]) do
+      %Exclusion{}
+      |> Exclusion.changeset(%{
+        exchange_id: exchange.id,
+        giver_id: giver.id,
+        excluded_id: excluded.id
+      })
+      |> Repo.insert()
+    end
+  end
+
+  @doc """
+  Removes the exclusion of `excluded` for `giver`, if any. Returns
+  `{:error, :not_found}` if there was none and `{:error, :exchange_drawn}`
+  if the exchange is drawn.
+  """
+  def remove_exclusion(%Exchange{} = exchange, %Participant{} = giver, %Participant{} = excluded) do
+    with :ok <- ensure_open(exchange),
+         %Exclusion{} = exclusion <-
+           Repo.get_by(Exclusion,
+             exchange_id: exchange.id,
+             giver_id: giver.id,
+             excluded_id: excluded.id
+           ) || {:error, :not_found} do
+      Repo.delete(exclusion)
+    end
+  end
+
   ## State guards
 
   defp ensure_open(%Exchange{} = exchange) do
@@ -111,5 +156,11 @@ defmodule SecretSanta.Exchanges do
 
   defp ensure_open(%Participant{exchange_id: exchange_id}) do
     exchange_id |> get_exchange!() |> ensure_open()
+  end
+
+  defp ensure_members(%Exchange{id: exchange_id}, participants) do
+    if Enum.all?(participants, &(&1.exchange_id == exchange_id)),
+      do: :ok,
+      else: {:error, :not_in_exchange}
   end
 end
