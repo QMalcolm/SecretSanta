@@ -42,6 +42,42 @@ defmodule SecretSanta.Exchanges do
   end
 
   @doc """
+  Creates a new open exchange from `attrs` and copies `source`'s
+  participants and exclusions into it (spec.md §4.1, "New from previous").
+
+  Assignments and send history are not copied; the new exchange starts as
+  if the same people had just been typed in again. Works whether or not
+  `source` has been drawn.
+  """
+  def clone_exchange(%Exchange{} = source, attrs) do
+    Repo.transaction(fn ->
+      with {:ok, exchange} <- create_exchange(attrs) do
+        id_map =
+          Map.new(list_participants(source), fn participant ->
+            {:ok, copy} =
+              create_participant(exchange, %{name: participant.name, email: participant.email})
+
+            {participant.id, copy.id}
+          end)
+
+        Enum.each(list_exclusions(source), fn exclusion ->
+          %Exclusion{}
+          |> Exclusion.changeset(%{
+            exchange_id: exchange.id,
+            giver_id: Map.fetch!(id_map, exclusion.giver_id),
+            excluded_id: Map.fetch!(id_map, exclusion.excluded_id)
+          })
+          |> Repo.insert!()
+        end)
+
+        exchange
+      else
+        {:error, changeset} -> Repo.rollback(changeset)
+      end
+    end)
+  end
+
+  @doc """
   Deletes an exchange and everything under it. Allowed in any state
   (spec.md §4.1).
   """

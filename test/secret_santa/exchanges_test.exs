@@ -41,6 +41,49 @@ defmodule SecretSanta.ExchangesTest do
       assert %{name: ["can't be blank"]} = errors_on(changeset)
     end
 
+    test "clone_exchange/2 copies participants and exclusions into a fresh open exchange" do
+      source = exchange_fixture(name: "Family 2025")
+      alice = participant_fixture(source, name: "Alice", email: "alice@example.com")
+      bob = participant_fixture(source, name: "Bob", email: "bob@example.com")
+      participant_fixture(source, name: "Carol", email: "carol@example.com")
+      {:ok, _} = Exchanges.add_exclusion(source, alice, bob)
+      {:ok, source} = Exchanges.draw_exchange(source)
+
+      assert {:ok, %Exchange{} = clone} = Exchanges.clone_exchange(source, %{name: "Family 2026"})
+
+      assert clone.name == "Family 2026"
+      assert Exchange.open?(clone)
+      refute clone.id == source.id
+
+      participants = Exchanges.list_participants(clone)
+
+      assert Enum.map(participants, &{&1.name, &1.email}) ==
+               [
+                 {"Alice", "alice@example.com"},
+                 {"Bob", "bob@example.com"},
+                 {"Carol", "carol@example.com"}
+               ]
+
+      assert Enum.all?(participants, &(&1.recipient_id == nil and &1.last_sent_at == nil))
+      assert Enum.all?(participants, &(&1.exchange_id == clone.id))
+
+      [new_alice, new_bob, _] = participants
+      assert [%{giver_id: g, excluded_id: e}] = Exchanges.list_exclusions(clone)
+      assert {g, e} == {new_alice.id, new_bob.id}
+
+      # Source untouched.
+      assert length(Exchanges.list_participants(source)) == 3
+      assert length(Exchanges.list_exclusions(source)) == 1
+    end
+
+    test "clone_exchange/2 with an invalid name creates nothing" do
+      source = exchange_fixture()
+      participant_fixture(source)
+
+      assert {:error, %Ecto.Changeset{}} = Exchanges.clone_exchange(source, %{name: ""})
+      assert length(Exchanges.list_exchanges()) == 1
+    end
+
     test "delete_exchange/1 deletes the exchange" do
       exchange = exchange_fixture()
       assert {:ok, %Exchange{}} = Exchanges.delete_exchange(exchange)
