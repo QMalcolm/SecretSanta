@@ -52,9 +52,10 @@ defmodule SecretSanta.Exchanges.ExclusionsTest do
                Exchanges.add_exclusion(ctx.exchange, stranger, ctx.alice)
     end
 
-    test "refuses once the exchange is drawn", ctx do
+    test "refuses once the exchange is drawn, even via a stale struct", ctx do
       drawn = draw!(ctx.exchange)
       assert {:error, :exchange_drawn} = Exchanges.add_exclusion(drawn, ctx.alice, ctx.bob)
+      assert {:error, :exchange_drawn} = Exchanges.add_exclusion(ctx.exchange, ctx.alice, ctx.bob)
     end
   end
 

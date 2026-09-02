@@ -104,6 +104,13 @@ defmodule SecretSanta.Exchanges.ParticipantsTest do
       assert {:error, :exchange_drawn} =
                Exchanges.create_participant(exchange, %{name: "Late", email: "late@example.com"})
     end
+
+    test "refuses even when handed a stale struct that predates the draw", %{exchange: stale} do
+      draw!(stale)
+
+      assert {:error, :exchange_drawn} =
+               Exchanges.create_participant(stale, %{name: "Late", email: "late@example.com"})
+    end
   end
 
   describe "update_participant/2" do
