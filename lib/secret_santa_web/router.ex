@@ -17,7 +17,7 @@ defmodule SecretSantaWeb.Router do
   scope "/", SecretSantaWeb do
     pipe_through :browser
 
-    get "/", PageController, :home
+    live "/", ExchangeLive.Index, :index
   end
 
   # Other scopes may use custom stacks.
