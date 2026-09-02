@@ -21,7 +21,7 @@ defmodule SecretSantaWeb.ExchangeLive.Show do
      |> assign(:page_title, exchange.name)
      |> assign(:editing, nil)
      |> assign_participant_form(%Participant{})
-     |> load_participants()}
+     |> reload()}
   end
 
   ## Participants
@@ -49,7 +49,7 @@ defmodule SecretSantaWeb.ExchangeLive.Show do
          |> put_flash(:info, "Saved #{participant.name}.")
          |> assign(:editing, nil)
          |> assign_participant_form(%Participant{})
-         |> load_participants()}
+         |> reload()}
 
       {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply, assign(socket, :form, to_form(changeset))}
@@ -90,10 +90,28 @@ defmodule SecretSantaWeb.ExchangeLive.Show do
         {:noreply,
          socket
          |> put_flash(:info, "Removed #{participant.name}.")
-         |> load_participants()}
+         |> reload()}
 
       {:error, :exchange_drawn} ->
         {:noreply, refuse_drawn(socket)}
+    end
+  end
+
+  def handle_event("toggle-exclusion", %{"giver" => giver_id, "excluded" => excluded_id}, socket) do
+    %{exchange: exchange, participants: participants} = socket.assigns
+    giver = find_participant!(participants, giver_id)
+    excluded = find_participant!(participants, excluded_id)
+
+    result =
+      if excluded?(socket.assigns.exclusions, giver, excluded),
+        do: Exchanges.remove_exclusion(exchange, giver, excluded),
+        else: Exchanges.add_exclusion(exchange, giver, excluded)
+
+    case result do
+      {:ok, _} -> {:noreply, reload(socket)}
+      {:error, :exchange_drawn} -> {:noreply, refuse_drawn(socket)}
+      # Stale grid (someone removed a participant in another tab); a reload fixes it.
+      {:error, _} -> {:noreply, reload(socket)}
     end
   end
 
@@ -101,8 +119,32 @@ defmodule SecretSantaWeb.ExchangeLive.Show do
     assign(socket, :form, to_form(Exchanges.change_participant(participant)))
   end
 
-  defp load_participants(socket) do
-    assign(socket, :participants, Exchanges.list_participants(socket.assigns.exchange))
+  ## Exclusions
+
+  defp find_participant!(participants, id) do
+    id = String.to_integer(id)
+    Enum.find(participants, &(&1.id == id)) || raise Ecto.NoResultsError, queryable: Participant
+  end
+
+  defp excluded?(exclusions, giver, excluded) do
+    Enum.any?(exclusions, &(&1.giver_id == giver.id and &1.excluded_id == excluded.id))
+  end
+
+  ## Loading
+
+  # Participants, exclusions, and the draw blockers derived from them are
+  # always loaded together: removing a participant cascades to exclusions,
+  # and any change to either can change what blocks the draw.
+  defp reload(socket) do
+    exchange = socket.assigns.exchange
+    participants = Exchanges.list_participants(exchange)
+    exclusions = Exchanges.list_exclusions(exchange)
+
+    assign(socket,
+      participants: participants,
+      exclusions: exclusions,
+      blockers: Exchanges.draw_blockers(exchange, participants, exclusions)
+    )
   end
 
   # The exchange was drawn under us (another tab, say). Reload so the page
@@ -112,7 +154,7 @@ defmodule SecretSantaWeb.ExchangeLive.Show do
     |> put_flash(:error, "This exchange has already been drawn and can no longer be changed.")
     |> assign(:exchange, Exchanges.get_exchange!(socket.assigns.exchange.id))
     |> assign(:editing, nil)
-    |> load_participants()
+    |> reload()
   end
 
   ## Rendering
@@ -189,7 +231,85 @@ defmodule SecretSantaWeb.ExchangeLive.Show do
           </div>
         </.form>
       </section>
+
+      <section :if={length(@participants) >= 2} id="exclusions" class="space-y-4">
+        <h2 class="text-base font-semibold">Exclusions</h2>
+        <p class="text-sm text-base-content/70">
+          Tick a box to stop the person in that row from drawing the person in that column.
+          Exclusions are one-way: to stop both directions, tick both boxes.
+        </p>
+
+        <div class="overflow-x-auto">
+          <table id="exclusions-grid" class="table table-sm">
+            <thead>
+              <tr>
+                <th class="text-left">must not draw →</th>
+                <th :for={p <- @participants} class="text-center whitespace-nowrap">{p.name}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                :for={giver <- @participants}
+                id={"exclusions-#{giver.id}"}
+                class={stuck?(@blockers, giver) && "bg-error/10"}
+              >
+                <th class="text-left whitespace-nowrap font-medium">{giver.name}</th>
+                <td :for={excluded <- @participants} class="text-center">
+                  <span :if={giver.id == excluded.id} class="text-base-content/30">—</span>
+                  <input
+                    :if={giver.id != excluded.id}
+                    type="checkbox"
+                    id={"exclusion-#{giver.id}-#{excluded.id}"}
+                    class="checkbox checkbox-sm"
+                    checked={excluded?(@exclusions, giver, excluded)}
+                    disabled={!@open?}
+                    phx-click="toggle-exclusion"
+                    phx-value-giver={giver.id}
+                    phx-value-excluded={excluded.id}
+                    aria-label={"#{giver.name} must not draw #{excluded.name}"}
+                  />
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section :if={@open?} id="draw" class="space-y-4">
+        <h2 class="text-base font-semibold">Draw</h2>
+        <.blockers blockers={@blockers} />
+      </section>
     </Layouts.app>
     """
+  end
+
+  attr :blockers, :list, required: true
+
+  defp blockers(assigns) do
+    ~H"""
+    <ul :if={@blockers != []} id="draw-blockers" class="space-y-1 text-sm">
+      <li :for={blocker <- @blockers} class="flex items-center gap-2 text-warning">
+        <.icon name="hero-exclamation-triangle" class="size-4 shrink-0" />
+        <span>{describe(blocker)}</span>
+      </li>
+    </ul>
+    <p :if={@blockers == []} id="draw-ready" class="text-sm text-success">
+      <.icon name="hero-check-circle" class="size-4 inline" /> Everyone has someone they can draw.
+    </p>
+    """
+  end
+
+  defp describe(:exchange_drawn), do: "This exchange has already been drawn."
+
+  defp describe({:too_few_participants, n}) do
+    "Need at least #{Exchanges.min_participants()} participants to draw (have #{n})."
+  end
+
+  defp describe({:no_legal_recipient, %Participant{name: name}}) do
+    "#{name} has nobody left they are allowed to draw."
+  end
+
+  defp stuck?(blockers, %Participant{id: id}) do
+    Enum.any?(blockers, &match?({:no_legal_recipient, %Participant{id: ^id}}, &1))
   end
 end
