@@ -18,6 +18,7 @@ defmodule SecretSantaWeb.Router do
     pipe_through :browser
 
     live "/", ExchangeLive.Index, :index
+    live "/exchanges/:id", ExchangeLive.Show, :show
   end
 
   # Other scopes may use custom stacks.

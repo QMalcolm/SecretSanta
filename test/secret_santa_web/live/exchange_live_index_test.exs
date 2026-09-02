@@ -16,6 +16,7 @@ defmodule SecretSantaWeb.ExchangeLive.IndexTest do
     assert view |> element("#exchange-#{open.id}") |> render() =~ "Open"
     assert view |> element("#exchange-#{drawn.id}") |> render() =~ "Drawn"
     assert view |> element("#exchange-#{open.id} td", "1") |> has_element?()
+    assert has_element?(view, ~s|#exchange-#{open.id} a[href="/exchanges/#{open.id}"]|)
   end
 
   test "shows an empty state", %{conn: conn} do
@@ -26,14 +27,12 @@ defmodule SecretSantaWeb.ExchangeLive.IndexTest do
   test "creates an exchange", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/")
 
-    html =
-      view
-      |> form("#new-exchange-form", exchange: %{name: "Family 2026"})
-      |> render_submit()
+    view
+    |> form("#new-exchange-form", exchange: %{name: "Family 2026"})
+    |> render_submit()
 
-    assert html =~ "Family 2026"
-    assert html =~ "Created Family 2026."
-    assert [%{name: "Family 2026"}] = SecretSanta.Exchanges.list_exchanges()
+    assert [%{name: "Family 2026"} = exchange] = SecretSanta.Exchanges.list_exchanges()
+    assert_redirect(view, ~p"/exchanges/#{exchange}")
   end
 
   test "shows validation errors", %{conn: conn} do

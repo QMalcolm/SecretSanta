@@ -26,9 +26,8 @@ defmodule SecretSantaWeb.ExchangeLive.Index do
       {:ok, exchange} ->
         {:noreply,
          socket
-         |> put_flash(:info, "Created #{exchange.name}.")
-         |> assign_new_form()
-         |> load_exchanges()}
+         |> put_flash(:info, "Created #{exchange.name}. Now add some people.")
+         |> push_navigate(to: ~p"/exchanges/#{exchange}")}
 
       {:error, changeset} ->
         {:noreply, assign(socket, :form, to_form(changeset))}
@@ -76,7 +75,11 @@ defmodule SecretSantaWeb.ExchangeLive.Index do
       </p>
 
       <.table :if={@exchanges != []} id="exchanges" rows={@exchanges} row_id={&"exchange-#{&1.id}"}>
-        <:col :let={exchange} label="Name">{exchange.name}</:col>
+        <:col :let={exchange} label="Name">
+          <.link navigate={~p"/exchanges/#{exchange}"} class="link link-hover font-medium">
+            {exchange.name}
+          </.link>
+        </:col>
         <:col :let={exchange} label="Participants">{exchange.participant_count}</:col>
         <:col :let={exchange} label="Status"><.status exchange={exchange} /></:col>
         <:action :let={exchange}>
