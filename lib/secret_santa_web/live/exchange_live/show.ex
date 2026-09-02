@@ -20,6 +20,7 @@ defmodule SecretSantaWeb.ExchangeLive.Show do
      |> assign(:exchange, exchange)
      |> assign(:page_title, exchange.name)
      |> assign(:editing, nil)
+     |> assign(:revealed, MapSet.new())
      |> assign_participant_form(%Participant{})
      |> reload()}
   end
@@ -113,6 +114,50 @@ defmodule SecretSantaWeb.ExchangeLive.Show do
       # Stale grid (someone removed a participant in another tab); a reload fixes it.
       {:error, _} -> {:noreply, reload(socket)}
     end
+  end
+
+  ## Draw and assignments
+
+  def handle_event("draw", _params, socket) do
+    case Exchanges.draw_exchange(socket.assigns.exchange) do
+      {:ok, exchange} ->
+        {:noreply,
+         socket
+         |> assign(:exchange, exchange)
+         |> assign(:editing, nil)
+         |> put_flash(:info, "Drawn! Everyone has a recipient.")
+         |> reload()}
+
+      {:error, {:no_valid_assignment, stuck}} ->
+        names = stuck |> Enum.map(& &1.name) |> Enum.join(", ")
+
+        {:noreply,
+         socket
+         |> put_flash(
+           :error,
+           "No valid draw exists with these exclusions. Nobody could be found for: #{names}. " <>
+             "Loosen the exclusions and try again."
+         )
+         |> reload()}
+
+      {:error, :exchange_drawn} ->
+        {:noreply, refuse_drawn(socket)}
+
+      {:error, blocker} ->
+        {:noreply, socket |> put_flash(:error, describe(blocker)) |> reload()}
+    end
+  end
+
+  def handle_event("toggle-reveal", %{"id" => id}, socket) do
+    id = String.to_integer(id)
+    revealed = socket.assigns.revealed
+
+    revealed =
+      if MapSet.member?(revealed, id),
+        do: MapSet.delete(revealed, id),
+        else: MapSet.put(revealed, id)
+
+    {:noreply, assign(socket, :revealed, revealed)}
   end
 
   defp assign_participant_form(socket, %Participant{} = participant) do
@@ -278,6 +323,39 @@ defmodule SecretSantaWeb.ExchangeLive.Show do
       <section :if={@open?} id="draw" class="space-y-4">
         <h2 class="text-base font-semibold">Draw</h2>
         <.blockers blockers={@blockers} />
+        <.button
+          id="draw-button"
+          variant="primary"
+          phx-click="draw"
+          disabled={@blockers != []}
+          data-confirm="Draw now? Participants and exclusions will be locked and cannot be changed afterwards."
+          phx-disable-with="Drawing..."
+        >
+          <.icon name="hero-gift" class="size-4" /> Draw
+        </.button>
+      </section>
+
+      <section :if={!@open?} id="assignments" class="space-y-4">
+        <h2 class="text-base font-semibold">Assignments</h2>
+        <p class="text-sm text-base-content/70">
+          Hidden so you don't spoil your own draw. Reveal a row only if you need to.
+        </p>
+        <.table id="assignments-table" rows={@participants} row_id={&"assignment-#{&1.id}"}>
+          <:col :let={p} label="Giver">{p.name}</:col>
+          <:col :let={p} label="Drew">
+            <span :if={MapSet.member?(@revealed, p.id)} class="font-medium">
+              {recipient_name(@participants, p)}
+            </span>
+            <span :if={!MapSet.member?(@revealed, p.id)} class="text-base-content/40 select-none">
+              ••••••••
+            </span>
+          </:col>
+          <:action :let={p}>
+            <.link phx-click="toggle-reveal" phx-value-id={p.id} class="link">
+              {if MapSet.member?(@revealed, p.id), do: "Hide", else: "Reveal"}
+            </.link>
+          </:action>
+        </.table>
       </section>
     </Layouts.app>
     """
@@ -307,6 +385,13 @@ defmodule SecretSantaWeb.ExchangeLive.Show do
 
   defp describe({:no_legal_recipient, %Participant{name: name}}) do
     "#{name} has nobody left they are allowed to draw."
+  end
+
+  defp recipient_name(participants, %Participant{recipient_id: recipient_id}) do
+    case Enum.find(participants, &(&1.id == recipient_id)) do
+      %Participant{name: name} -> name
+      nil -> "?"
+    end
   end
 
   defp stuck?(blockers, %Participant{id: id}) do

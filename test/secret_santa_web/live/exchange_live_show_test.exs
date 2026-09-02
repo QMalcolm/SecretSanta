@@ -191,6 +191,91 @@ defmodule SecretSantaWeb.ExchangeLive.ShowTest do
     end
   end
 
+  describe "drawing" do
+    setup do
+      exchange = exchange_fixture()
+      alice = participant_fixture(exchange, name: "Alice")
+      bob = participant_fixture(exchange, name: "Bob")
+      carol = participant_fixture(exchange, name: "Carol")
+      %{exchange: exchange, alice: alice, bob: bob, carol: carol}
+    end
+
+    test "the button is disabled while something blocks the draw", %{conn: conn} do
+      exchange = exchange_fixture()
+      participant_fixture(exchange)
+      participant_fixture(exchange)
+      {:ok, view, _html} = live(conn, ~p"/exchanges/#{exchange}")
+
+      assert has_element?(view, "#draw-button[disabled]")
+    end
+
+    test "draws, locks the page, and masks assignments", ctx do
+      {:ok, view, _html} = live(ctx.conn, ~p"/exchanges/#{ctx.exchange}")
+      refute has_element?(view, "#draw-button[disabled]")
+
+      html = view |> element("#draw-button") |> render_click()
+
+      assert html =~ "Drawn! Everyone has a recipient."
+      assert html =~ "Drawn 20"
+      refute has_element?(view, "#participant-form")
+      refute has_element?(view, "#draw")
+      assert has_element?(view, "#assignments")
+
+      participants = Exchanges.list_participants(ctx.exchange)
+      assert Enum.all?(participants, &(&1.recipient_id != nil))
+
+      row = view |> element("#assignment-#{ctx.alice.id}") |> render()
+      assert row =~ "••••"
+      refute row =~ recipient_name(participants, ctx.alice)
+    end
+
+    test "reveals and hides one row at a time", ctx do
+      {:ok, view, _html} = live(ctx.conn, ~p"/exchanges/#{ctx.exchange}")
+      view |> element("#draw-button") |> render_click()
+      participants = Exchanges.list_participants(ctx.exchange)
+
+      view |> element("#assignment-#{ctx.alice.id} a", "Reveal") |> render_click()
+
+      assert view |> element("#assignment-#{ctx.alice.id}") |> render() =~
+               recipient_name(participants, ctx.alice)
+
+      assert view |> element("#assignment-#{ctx.bob.id}") |> render() =~ "••••"
+
+      view |> element("#assignment-#{ctx.alice.id} a", "Hide") |> render_click()
+      assert view |> element("#assignment-#{ctx.alice.id}") |> render() =~ "••••"
+    end
+
+    test "explains a non-obvious impossible draw and stays open", ctx do
+      # Alice and Bob can each only draw Carol.
+      {:ok, _} = Exchanges.add_exclusion(ctx.exchange, ctx.alice, ctx.bob)
+      {:ok, _} = Exchanges.add_exclusion(ctx.exchange, ctx.bob, ctx.alice)
+      {:ok, view, _html} = live(ctx.conn, ~p"/exchanges/#{ctx.exchange}")
+      refute has_element?(view, "#draw-button[disabled]")
+
+      html = view |> element("#draw-button") |> render_click()
+
+      assert html =~ "No valid draw exists"
+      assert html =~ ~r/Nobody could be found for: (Alice|Bob)\./
+      assert has_element?(view, "#participant-form")
+      assert Exchanges.get_exchange!(ctx.exchange.id).drawn_at == nil
+    end
+
+    test "a second draw from a stale tab is refused", ctx do
+      {:ok, view, _html} = live(ctx.conn, ~p"/exchanges/#{ctx.exchange}")
+      {:ok, _} = Exchanges.draw_exchange(ctx.exchange)
+
+      html = view |> element("#draw-button") |> render_click()
+
+      assert html =~ "already been drawn"
+      assert has_element?(view, "#assignments")
+    end
+
+    defp recipient_name(participants, giver) do
+      giver = Enum.find(participants, &(&1.id == giver.id))
+      Enum.find(participants, &(&1.id == giver.recipient_id)).name
+    end
+  end
+
   describe "a drawn exchange" do
     test "is read-only", %{conn: conn} do
       exchange = drawn_exchange_fixture(name: "Work 2025")
