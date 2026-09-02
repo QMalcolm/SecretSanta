@@ -39,3 +39,6 @@ npm-debug.log
 *.db
 *.db-*
 
+
+# Local environment (SMTP credentials etc.), sourced by the shell
+.env
