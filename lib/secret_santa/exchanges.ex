@@ -17,9 +17,18 @@ defmodule SecretSanta.Exchanges do
 
   ## Exchanges
 
-  @doc "Returns all exchanges, newest first."
+  @doc """
+  Returns all exchanges, newest first, with `participant_count` filled in.
+  """
   def list_exchanges do
-    Repo.all(from e in Exchange, order_by: [desc: e.inserted_at, desc: e.id])
+    Repo.all(
+      from e in Exchange,
+        left_join: p in Participant,
+        on: p.exchange_id == e.id,
+        group_by: e.id,
+        order_by: [desc: e.inserted_at, desc: e.id],
+        select: %{e | participant_count: count(p.id)}
+    )
   end
 
   @doc "Gets a single exchange. Raises `Ecto.NoResultsError` if not found."
@@ -255,12 +264,14 @@ defmodule SecretSanta.Exchanges do
 
   ## State guards
 
-  defp ensure_open(%Exchange{} = exchange) do
-    if Exchange.open?(exchange), do: :ok, else: {:error, :exchange_drawn}
-  end
+  # Always re-reads the exchange: the struct a caller holds may predate the
+  # draw (another tab, a double click), and "immutable once drawn" has to
+  # hold against stale callers, not just honest ones.
+  defp ensure_open(%Exchange{id: exchange_id}), do: ensure_open_id(exchange_id)
+  defp ensure_open(%Participant{exchange_id: exchange_id}), do: ensure_open_id(exchange_id)
 
-  defp ensure_open(%Participant{exchange_id: exchange_id}) do
-    exchange_id |> get_exchange!() |> ensure_open()
+  defp ensure_open_id(exchange_id) do
+    if Exchange.open?(get_exchange!(exchange_id)), do: :ok, else: {:error, :exchange_drawn}
   end
 
   defp ensure_members(%Exchange{id: exchange_id}, participants) do
