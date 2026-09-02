@@ -14,6 +14,7 @@ defmodule SecretSanta.Exchanges.Exchange do
   schema "exchanges" do
     field :name, :string
     field :drawn_at, :utc_datetime
+    field :participant_count, :integer, virtual: true
 
     timestamps(type: :utc_datetime)
   end

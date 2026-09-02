@@ -14,6 +14,16 @@ defmodule SecretSanta.ExchangesTest do
       assert Enum.map(Exchanges.list_exchanges(), & &1.id) == [newer.id, older.id]
     end
 
+    test "list_exchanges/0 fills in participant_count" do
+      exchange = exchange_fixture()
+      participant_fixture(exchange)
+      participant_fixture(exchange)
+      empty = exchange_fixture()
+
+      counts = Map.new(Exchanges.list_exchanges(), &{&1.id, &1.participant_count})
+      assert counts == %{exchange.id => 2, empty.id => 0}
+    end
+
     test "get_exchange!/1 returns the exchange with the given id" do
       exchange = exchange_fixture()
       assert Exchanges.get_exchange!(exchange.id) == exchange

@@ -17,9 +17,18 @@ defmodule SecretSanta.Exchanges do
 
   ## Exchanges
 
-  @doc "Returns all exchanges, newest first."
+  @doc """
+  Returns all exchanges, newest first, with `participant_count` filled in.
+  """
   def list_exchanges do
-    Repo.all(from e in Exchange, order_by: [desc: e.inserted_at, desc: e.id])
+    Repo.all(
+      from e in Exchange,
+        left_join: p in Participant,
+        on: p.exchange_id == e.id,
+        group_by: e.id,
+        order_by: [desc: e.inserted_at, desc: e.id],
+        select: %{e | participant_count: count(p.id)}
+    )
   end
 
   @doc "Gets a single exchange. Raises `Ecto.NoResultsError` if not found."
