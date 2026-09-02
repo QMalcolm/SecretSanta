@@ -11,7 +11,9 @@ defmodule SecretSanta.Exchanges do
   import Ecto.Query, warn: false
   alias SecretSanta.Repo
 
-  alias SecretSanta.Exchanges.{Exchange, Exclusion, Participant}
+  alias SecretSanta.Exchanges.{Exchange, Exclusion, Matching, Participant}
+
+  @min_participants 3
 
   ## Exchanges
 
@@ -146,6 +148,109 @@ defmodule SecretSanta.Exchanges do
            ) || {:error, :not_found} do
       Repo.delete(exclusion)
     end
+  end
+
+  ## Drawing
+
+  @typedoc """
+  A reason the draw cannot happen right now (spec.md §4.3, §4.4).
+  """
+  @type blocker ::
+          :exchange_drawn
+          | {:too_few_participants, non_neg_integer()}
+          | {:no_legal_recipient, Participant.t()}
+
+  @doc "The smallest group that can be drawn."
+  def min_participants, do: @min_participants
+
+  @doc """
+  Maps each participant id to the ids they are allowed to draw: everyone
+  in the exchange except themselves and anyone they have excluded.
+
+  Pure; takes already-loaded lists so the UI can recompute on every
+  change without extra queries.
+  """
+  def legal_recipients(participants, exclusions) do
+    ids = Enum.map(participants, & &1.id)
+
+    excluded_by_giver =
+      Enum.group_by(exclusions, & &1.giver_id, & &1.excluded_id)
+
+    Map.new(ids, fn giver_id ->
+      excluded = Map.get(excluded_by_giver, giver_id, [])
+      {giver_id, Enum.reject(ids, &(&1 == giver_id or &1 in excluded))}
+    end)
+  end
+
+  @doc """
+  Everything currently preventing a draw, in display order, or `[]` if the
+  draw button may be enabled. The `{:no_legal_recipient, participant}`
+  blockers are the "live validation" of spec.md §4.3; a draw can still
+  fail for non-obvious reasons (see `draw_exchange/1`).
+  """
+  @spec draw_blockers(Exchange.t()) :: [blocker]
+  def draw_blockers(%Exchange{} = exchange) do
+    draw_blockers(exchange, list_participants(exchange), list_exclusions(exchange))
+  end
+
+  @spec draw_blockers(Exchange.t(), [Participant.t()], [Exclusion.t()]) :: [blocker]
+  def draw_blockers(%Exchange{} = exchange, participants, exclusions) do
+    legal = legal_recipients(participants, exclusions)
+
+    stuck =
+      participants
+      |> Enum.filter(&(Map.fetch!(legal, &1.id) == []))
+      |> Enum.map(&{:no_legal_recipient, &1})
+
+    List.flatten([
+      if(Exchange.open?(exchange), do: [], else: :exchange_drawn),
+      if(length(participants) < @min_participants,
+        do: {:too_few_participants, length(participants)},
+        else: []
+      ),
+      stuck
+    ])
+  end
+
+  @doc """
+  Makes the draw: assigns every participant a recipient honoring the
+  exclusions and stamps `drawn_at`, all in one transaction (spec.md §4.4).
+
+  Returns `{:ok, exchange}` with the updated exchange, or `{:error, reason}`
+  where reason is a `t:blocker/0` or `{:no_valid_assignment, participants}`
+  naming those left without a recipient when the exclusions are
+  unsatisfiable in a non-obvious way. Nothing is written on error.
+  """
+  @spec draw_exchange(Exchange.t()) ::
+          {:ok, Exchange.t()} | {:error, blocker | {:no_valid_assignment, [Participant.t()]}}
+  def draw_exchange(%Exchange{id: id}) do
+    Repo.transaction(fn ->
+      # Reload inside the transaction so a stale struct cannot double-draw.
+      exchange = get_exchange!(id)
+      participants = list_participants(exchange)
+      exclusions = list_exclusions(exchange)
+
+      with [] <- draw_blockers(exchange, participants, exclusions),
+           {:ok, assignment} <-
+             participants |> legal_recipients(exclusions) |> Matching.perfect_matching() do
+        Enum.each(participants, fn participant ->
+          participant
+          |> Ecto.Changeset.change(recipient_id: Map.fetch!(assignment, participant.id))
+          |> Repo.update!()
+        end)
+
+        exchange
+        |> Ecto.Changeset.change(drawn_at: DateTime.utc_now(:second))
+        |> Repo.update!()
+      else
+        [blocker | _] ->
+          Repo.rollback(blocker)
+
+        {:error, unmatched_ids} ->
+          unmatched = Enum.filter(participants, &(&1.id in unmatched_ids))
+          Repo.rollback({:no_valid_assignment, unmatched})
+      end
+    end)
   end
 
   ## State guards

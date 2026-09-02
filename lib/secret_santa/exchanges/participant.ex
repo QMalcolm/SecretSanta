@@ -11,6 +11,8 @@ defmodule SecretSanta.Exchanges.Participant do
 
   alias SecretSanta.Exchanges.Exchange
 
+  @type t :: %__MODULE__{}
+
   schema "participants" do
     field :name, :string
     field :email, :string
