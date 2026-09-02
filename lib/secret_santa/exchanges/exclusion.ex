@@ -9,6 +9,8 @@ defmodule SecretSanta.Exchanges.Exclusion do
 
   alias SecretSanta.Exchanges.{Exchange, Participant}
 
+  @type t :: %__MODULE__{}
+
   schema "exclusions" do
     belongs_to :exchange, Exchange
     belongs_to :giver, Participant
