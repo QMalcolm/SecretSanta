@@ -96,19 +96,43 @@ if config_env() == :prod do
 
   # ## Configuring the mailer
   #
-  # In production you need to configure the mailer to use a different adapter.
-  # Here is an example configuration for Mailgun:
-  #
-  #     config :secret_santa, SecretSanta.Mailer,
-  #       adapter: Swoosh.Adapters.Mailgun,
-  #       api_key: System.get_env("MAILGUN_API_KEY"),
-  #       domain: System.get_env("MAILGUN_DOMAIN")
-  #
-  # Most non-SMTP adapters require an API client. Swoosh supports Req, Hackney,
-  # and Finch out-of-the-box. This configuration is typically done at
-  # compile-time in your config/prod.exs:
-  #
-  #     config :swoosh, :api_client, Swoosh.ApiClient.Req
-  #
-  # See https://hexdocs.pm/swoosh/Swoosh.html#module-installation for details.
+  # Real email is only ever sent under prod config; dev uses the Local
+  # adapter (see config/config.exs) and test uses the Test adapter. All
+  # settings come from the environment so no credentials land on disk in
+  # the database. See spec.md §2.1.
+  smtp_env = fn name ->
+    System.get_env(name) ||
+      raise """
+      environment variable #{name} is missing.
+      See spec.md §2.1 for the SMTP variables the app expects.
+      """
+  end
+
+  smtp_tls =
+    case System.get_env("SMTP_TLS", "if_available") do
+      "always" -> :always
+      "if_available" -> :if_available
+      "never" -> :never
+      other -> raise "SMTP_TLS must be one of always, if_available, never; got #{inspect(other)}"
+    end
+
+  smtp_tls_verify =
+    case System.get_env("SMTP_TLS_VERIFY", "peer") do
+      "peer" -> :verify_peer
+      "none" -> :verify_none
+      other -> raise "SMTP_TLS_VERIFY must be one of peer, none; got #{inspect(other)}"
+    end
+
+  config :secret_santa, SecretSanta.Mailer,
+    adapter: Swoosh.Adapters.SMTP,
+    relay: smtp_env.("SMTP_HOST"),
+    port: String.to_integer(smtp_env.("SMTP_PORT")),
+    username: smtp_env.("SMTP_USERNAME"),
+    password: smtp_env.("SMTP_PASSWORD"),
+    tls: smtp_tls,
+    tls_options: [verify: smtp_tls_verify],
+    auth: :always,
+    retries: 1
+
+  config :secret_santa, :mail_from, smtp_env.("SMTP_FROM")
 end

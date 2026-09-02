@@ -47,6 +47,7 @@ loaded by the user's shell is fine):
 | `SMTP_PASSWORD` |                                                    |
 | `SMTP_FROM`     | From address on every outgoing email               |
 | `SMTP_TLS`      | `always` / `if_available` / `never` (default `if_available`) |
+| `SMTP_TLS_VERIFY` | `peer` / `none` (default `peer`). Proton Bridge presents a self-signed certificate, so it needs `none`. |
 
 Proton Mail note: Proton has no public SMTP endpoint. The organizer runs
 [Proton Bridge](https://proton.me/mail/bridge) locally, which exposes a plain
