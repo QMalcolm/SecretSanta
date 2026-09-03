@@ -24,6 +24,7 @@ defmodule SecretSantaWeb.ExchangeLive.Show do
      |> assign(:send_queue, [])
      |> assign(:sending_now, nil)
      |> assign(:send_tally, nil)
+     |> assign(:correction, nil)
      |> assign_participant_form(%Participant{})
      |> reload()}
   end
@@ -52,6 +53,7 @@ defmodule SecretSantaWeb.ExchangeLive.Show do
          socket
          |> put_flash(:info, "Saved #{participant.name}.")
          |> assign(:editing, nil)
+         |> assign(:correction, correction(exchange, editing, participant))
          |> assign_participant_form(%Participant{})
          |> reload()}
 
@@ -177,6 +179,29 @@ defmodule SecretSantaWeb.ExchangeLive.Show do
   # Sends go one at a time through the mailbox so the page re-renders
   # between them: :send_next marks a row as sending, then {:send, id}
   # actually delivers. A batch that is already running is left alone.
+  ## Corrections after the draw
+
+  def handle_event("dismiss-correction", _params, socket) do
+    {:noreply, assign(socket, :correction, nil)}
+  end
+
+  def handle_event("resend-corrected", %{"to" => "self"}, socket) do
+    %{participant: participant} = socket.assigns.correction
+    {:noreply, socket |> assign(:correction, nil) |> start_sending([participant.id])}
+  end
+
+  def handle_event("resend-corrected", %{"to" => "giver"}, socket) do
+    %{participant: participant} = socket.assigns.correction
+
+    case Enum.find(socket.assigns.participants, &(&1.recipient_id == participant.id)) do
+      %Participant{id: giver_id} ->
+        {:noreply, socket |> assign(:correction, nil) |> start_sending([giver_id])}
+
+      nil ->
+        {:noreply, assign(socket, :correction, nil)}
+    end
+  end
+
   defp start_sending(%{assigns: %{sending_now: nil}} = socket, ids) when ids != [] do
     send(self(), :send_next)
     assign(socket, send_queue: ids, send_tally: %{ok: 0, error: 0})
@@ -227,6 +252,25 @@ defmodule SecretSantaWeb.ExchangeLive.Show do
 
   defp plural(1, word), do: word
   defp plural(_, word), do: word <> "s"
+
+  # On a drawn exchange, an edit may invalidate emails already sent: a new
+  # address means the participant never got theirs, a new name means
+  # whoever drew them was told the old one. Record which, so the page can
+  # offer the matching resend (spec.md §4.2).
+  defp correction(%Exchange{} = exchange, %Participant{} = before, %Participant{} = after_) do
+    if Exchange.open?(exchange) do
+      nil
+    else
+      changes = %{
+        email: before.email != after_.email,
+        name: before.name != after_.name
+      }
+
+      if changes.email or changes.name, do: Map.put(changes, :participant, after_), else: nil
+    end
+  end
+
+  defp correction(_exchange, nil, _participant), do: nil
 
   defp assign_participant_form(socket, %Participant{} = participant) do
     assign(socket, :form, to_form(Exchanges.change_participant(participant)))
@@ -308,9 +352,10 @@ defmodule SecretSantaWeb.ExchangeLive.Show do
         >
           <:col :let={p} label="Name">{p.name}</:col>
           <:col :let={p} label="Email">{p.email}</:col>
-          <:action :let={p} :if={@open?}>
+          <:action :let={p}>
             <.link phx-click="edit" phx-value-id={p.id} class="link">Edit</.link>
             <.link
+              :if={@open?}
               phx-click="delete-participant"
               phx-value-id={p.id}
               data-confirm={"Remove #{p.name} from this exchange?"}
@@ -321,8 +366,10 @@ defmodule SecretSantaWeb.ExchangeLive.Show do
           </:action>
         </.table>
 
+        <.correction_alert :if={@correction} correction={@correction} />
+
         <.form
-          :if={@open?}
+          :if={@open? or @editing}
           for={@form}
           id="participant-form"
           phx-change="validate"
@@ -332,6 +379,10 @@ defmodule SecretSantaWeb.ExchangeLive.Show do
           <h3 class="font-medium mb-2">
             {if @editing, do: "Edit #{@editing.name}", else: "Add a participant"}
           </h3>
+          <p :if={@editing && !@open?} class="text-sm text-base-content/70 mb-2">
+            The draw is locked, but a name or email can still be corrected. You'll be offered a
+            resend afterwards.
+          </p>
           <div class="grid gap-2 sm:grid-cols-2">
             <.input field={@form[:name]} label="Name" placeholder="Alice" />
             <.input field={@form[:email]} type="email" label="Email" placeholder="alice@example.com" />
@@ -480,6 +531,38 @@ defmodule SecretSantaWeb.ExchangeLive.Show do
 
   defp describe({:no_legal_recipient, %Participant{name: name}}) do
     "#{name} has nobody left they are allowed to draw."
+  end
+
+  attr :correction, :map, required: true
+
+  defp correction_alert(assigns) do
+    ~H"""
+    <div
+      id="correction-alert"
+      role="alert"
+      class="alert alert-info alert-vertical sm:alert-horizontal"
+    >
+      <.icon name="hero-envelope" class="size-5 shrink-0" />
+      <div class="space-y-1">
+        <p :if={@correction.email}>
+          {@correction.participant.name}'s email changed. Any email already sent went to the old
+          address.
+        </p>
+        <p :if={@correction.name}>
+          {@correction.participant.name}'s name changed. Whoever drew them was told the old name.
+        </p>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <.button :if={@correction.email} phx-click="resend-corrected" phx-value-to="self">
+          Resend to {@correction.participant.name}
+        </.button>
+        <.button :if={@correction.name} phx-click="resend-corrected" phx-value-to="giver">
+          Resend to {@correction.participant.name}'s Secret Santa
+        </.button>
+        <.button phx-click="dismiss-correction">Dismiss</.button>
+      </div>
+    </div>
+    """
   end
 
   attr :participant, Participant, required: true
