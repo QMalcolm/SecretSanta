@@ -1,5 +1,5 @@
 defmodule SecretSanta.ExchangesTest do
-  use SecretSanta.DataCase, async: true
+  use SecretSanta.DataCase
 
   import SecretSanta.ExchangesFixtures
 
