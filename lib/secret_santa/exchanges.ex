@@ -124,15 +124,14 @@ defmodule SecretSanta.Exchanges do
   end
 
   @doc """
-  Updates a participant's name or email. Only allowed while the exchange is
-  open; returns `{:error, :exchange_drawn}` otherwise.
+  Corrects a participant's name or email. Allowed in any state (spec.md
+  §4.2): neither field affects who drew whom, and a typo found after
+  "Send all" should cost a resend, not a redraw.
   """
   def update_participant(%Participant{} = participant, attrs) do
-    with :ok <- ensure_open(participant) do
-      participant
-      |> Participant.changeset(attrs)
-      |> Repo.update()
-    end
+    participant
+    |> Participant.changeset(attrs)
+    |> Repo.update()
   end
 
   @doc """

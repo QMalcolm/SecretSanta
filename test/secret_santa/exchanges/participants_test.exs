@@ -124,11 +124,14 @@ defmodule SecretSanta.Exchanges.ParticipantsTest do
       assert updated.email == "bob@example.com"
     end
 
-    test "refuses once the exchange is drawn", %{exchange: exchange} do
+    test "still works once the exchange is drawn", %{exchange: exchange} do
       participant = participant_fixture(exchange)
       draw!(exchange)
 
-      assert {:error, :exchange_drawn} = Exchanges.update_participant(participant, %{name: "Bob"})
+      assert {:ok, updated} =
+               Exchanges.update_participant(participant, %{email: "fixed@example.com"})
+
+      assert updated.email == "fixed@example.com"
     end
   end
 
