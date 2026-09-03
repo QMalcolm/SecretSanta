@@ -11,7 +11,8 @@ defmodule SecretSanta.Exchanges do
   import Ecto.Query, warn: false
   alias SecretSanta.Repo
 
-  alias SecretSanta.Exchanges.{Exchange, Exclusion, Matching, Participant}
+  alias SecretSanta.Exchanges.{AssignmentEmail, Exchange, Exclusion, Matching, Participant}
+  alias SecretSanta.Mailer
 
   @min_participants 3
 
@@ -297,6 +298,65 @@ defmodule SecretSanta.Exchanges do
       end
     end)
   end
+
+  ## Sending
+
+  @doc """
+  Participants of a drawn exchange who have never been successfully
+  emailed, alphabetically. This is what "Send all" targets (spec.md §4.6).
+  """
+  def unsent_participants(%Exchange{id: exchange_id}) do
+    Repo.all(
+      from p in Participant,
+        where: p.exchange_id == ^exchange_id and is_nil(p.last_sent_at),
+        order_by: [asc: p.name, asc: p.id]
+    )
+  end
+
+  @doc """
+  Emails `participant` the name of the person they drew and records the
+  outcome on their row (spec.md §4.6). Always sends, regardless of any
+  earlier success; this is also the per-row "Resend".
+
+  Returns `{:ok, participant}` with `last_sent_at` set and `last_error`
+  cleared, `{:error, participant}` with `last_error` set if delivery
+  failed, or `{:error, :exchange_not_drawn}` if there is nothing to send
+  yet. Only the mailer's answer is trusted: a row is never marked sent
+  unless the adapter accepted the message.
+  """
+  def send_assignment(%Participant{id: id}) do
+    participant = Repo.get!(Participant, id)
+    exchange = get_exchange!(participant.exchange_id)
+
+    if Exchange.open?(exchange) or is_nil(participant.recipient_id) do
+      {:error, :exchange_not_drawn}
+    else
+      recipient = Repo.get!(Participant, participant.recipient_id)
+      email = AssignmentEmail.build(exchange, participant, recipient)
+
+      case Mailer.deliver(email) do
+        {:ok, _} ->
+          participant
+          |> Ecto.Changeset.change(last_sent_at: DateTime.utc_now(:second), last_error: nil)
+          |> Repo.update()
+
+        {:error, reason} ->
+          {:ok, participant} =
+            participant
+            |> Ecto.Changeset.change(last_error: format_error(reason))
+            |> Repo.update()
+
+          {:error, participant}
+      end
+    end
+  end
+
+  # Adapter errors are arbitrary terms (gen_smtp nests tuples several
+  # deep). Keep whatever is human-readable, bounded so a pathological
+  # error cannot bloat the row.
+  @max_error_length 500
+  defp format_error(reason) when is_binary(reason), do: String.slice(reason, 0, @max_error_length)
+  defp format_error(reason), do: reason |> inspect() |> String.slice(0, @max_error_length)
 
   ## State guards
 
