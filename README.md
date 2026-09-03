@@ -56,6 +56,24 @@ MIX_ENV=prod mix ecto.migrate
 MIX_ENV=prod mix phx.server
 ```
 
+### Gmail
+
+Gmail's SMTP server accepts app passwords only, so turn on 2-Step
+Verification for the account and create one at
+<https://myaccount.google.com/apppasswords>. Gmail rewrites the From header
+to the authenticated account, so `SMTP_FROM` should be the same address.
+Gmail's certificate is publicly trusted, so leave verification on:
+
+```sh
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=you@gmail.com
+SMTP_PASSWORD=<the 16-character app password>
+SMTP_FROM=you@gmail.com
+SMTP_TLS=always
+SMTP_TLS_VERIFY=peer
+```
+
 ### Proton Mail
 
 Proton has no public SMTP endpoint. Run

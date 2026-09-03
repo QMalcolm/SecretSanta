@@ -42,13 +42,17 @@ set):
 
 | Variable        | Purpose                                            |
 | --------------- | -------------------------------------------------- |
-| `SMTP_HOST`     | e.g. `127.0.0.1` for Proton Bridge                 |
-| `SMTP_PORT`     | e.g. `1025`                                        |
+| `SMTP_HOST`     | e.g. `smtp.gmail.com`, or `127.0.0.1` for Proton Bridge |
+| `SMTP_PORT`     | e.g. `587`, or `1025` for Proton Bridge            |
 | `SMTP_USERNAME` |                                                    |
 | `SMTP_PASSWORD` |                                                    |
 | `SMTP_FROM`     | From address on every outgoing email               |
 | `SMTP_TLS`      | `always` / `if_available` / `never` (default `if_available`) |
 | `SMTP_TLS_VERIFY` | `peer` / `none` (default `peer`). Proton Bridge presents a self-signed certificate, so it needs `none`. |
+
+Gmail note: Gmail's SMTP server requires an app password (which in turn
+requires 2-Step Verification on the account) and rewrites From to the
+authenticated address, so `SMTP_FROM` should match `SMTP_USERNAME`.
 
 Proton Mail note: Proton has no public SMTP endpoint. The organizer runs
 [Proton Bridge](https://proton.me/mail/bridge) locally, which exposes a plain
