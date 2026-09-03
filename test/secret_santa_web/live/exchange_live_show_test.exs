@@ -280,10 +280,7 @@ defmodule SecretSantaWeb.ExchangeLive.ShowTest do
     import Swoosh.TestAssertions
 
     setup do
-      # The Test adapter notifies the sending process, which here is the
-      # LiveView; route notifications to the test instead.
-      Application.put_env(:swoosh, :shared_test_process, self())
-      on_exit(fn -> Application.delete_env(:swoosh, :shared_test_process) end)
+      capture_emails()
 
       exchange = exchange_fixture(name: "Family 2026")
       alice = participant_fixture(exchange, name: "Alice", email: "alice@example.com")
@@ -365,36 +362,142 @@ defmodule SecretSantaWeb.ExchangeLive.ShowTest do
       assert view |> element("#send-all-button") |> render() =~ "Send all (3 unsent)"
       assert_no_email_sent()
     end
+  end
 
-    # Sends are driven by messages the LiveView posts to itself, so the
-    # click returns before the batch finishes.
-    defp wait_until_idle(view, attempts \\ 50) do
-      html = render(view)
+  # The Swoosh Test adapter notifies the sending process, which in these
+  # tests is the LiveView; route notifications to the test instead.
+  defp capture_emails do
+    Application.put_env(:swoosh, :shared_test_process, self())
+    on_exit(fn -> Application.delete_env(:swoosh, :shared_test_process) end)
+  end
 
-      cond do
-        not (html =~ "Sending…") and not (html =~ ~s(id="send-all-button" disabled)) ->
-          html
+  # Sends are driven by messages the LiveView posts to itself, so the
+  # click returns before the batch finishes.
+  defp wait_until_idle(view, attempts \\ 50) do
+    html = render(view)
 
-        not (html =~ "Sending…") and html =~ "Send all (0 unsent)" ->
-          html
+    cond do
+      not (html =~ "Sending…") and not (html =~ ~s(id="send-all-button" disabled)) ->
+        html
 
-        attempts == 0 ->
-          flunk("sending never finished")
+      not (html =~ "Sending…") and html =~ "Send all (0 unsent)" ->
+        html
 
-        true ->
-          Process.sleep(10)
-          wait_until_idle(view, attempts - 1)
-      end
+      attempts == 0 ->
+        flunk("sending never finished")
+
+      true ->
+        Process.sleep(10)
+        wait_until_idle(view, attempts - 1)
     end
   end
 
   describe "a drawn exchange" do
-    test "is read-only", %{conn: conn} do
-      exchange = drawn_exchange_fixture(name: "Work 2025")
+    test "locks adding and removing but not editing", %{conn: conn} do
+      exchange = exchange_fixture(name: "Work 2025")
+      alice = participant_fixture(exchange, name: "Alice")
+      participant_fixture(exchange, name: "Bob")
+      participant_fixture(exchange, name: "Carol")
+      {:ok, _} = Exchanges.draw_exchange(exchange)
+
       {:ok, view, html} = live(conn, ~p"/exchanges/#{exchange}")
 
       assert html =~ "Drawn"
       refute has_element?(view, "#participant-form")
+      refute has_element?(view, "#participant-#{alice.id} a", "Remove")
+      assert has_element?(view, "#participant-#{alice.id} a", "Edit")
+    end
+  end
+
+  describe "correcting a participant after the draw" do
+    import Swoosh.TestAssertions
+
+    setup do
+      capture_emails()
+
+      exchange = exchange_fixture(name: "Family 2026")
+      alice = participant_fixture(exchange, name: "Alice", email: "alice@example.com")
+      participant_fixture(exchange, name: "Bob", email: "bob@example.com")
+      participant_fixture(exchange, name: "Carol", email: "carol@example.com")
+      {:ok, exchange} = Exchanges.draw_exchange(exchange)
+      %{exchange: exchange, alice: alice}
+    end
+
+    test "fixing an email offers a resend to that person", ctx do
+      {:ok, view, _html} = live(ctx.conn, ~p"/exchanges/#{ctx.exchange}")
+
+      view |> element("#participant-#{ctx.alice.id} a", "Edit") |> render_click()
+      assert render(view) =~ "draw is locked"
+
+      view
+      |> form("#participant-form", participant: %{email: "alice@fixed.example.com"})
+      |> render_submit()
+
+      alert = view |> element("#correction-alert") |> render()
+      assert alert =~ "Alice&#39;s email changed"
+      refute alert =~ "name changed"
+      assert has_element?(view, "#correction-alert button", "Resend to Alice")
+      refute has_element?(view, "#participant-form")
+
+      view |> element("#correction-alert button", "Resend to Alice") |> render_click()
+      wait_until_idle(view)
+
+      assert_email_sent(to: {"Alice", "alice@fixed.example.com"})
+      refute has_element?(view, "#correction-alert")
+    end
+
+    test "fixing a name offers a resend to their Secret Santa without naming them", ctx do
+      {:ok, view, _html} = live(ctx.conn, ~p"/exchanges/#{ctx.exchange}")
+
+      view |> element("#participant-#{ctx.alice.id} a", "Edit") |> render_click()
+
+      view
+      |> form("#participant-form", participant: %{name: "Alicia"})
+      |> render_submit()
+
+      participants = Exchanges.list_participants(ctx.exchange)
+      giver = Enum.find(participants, &(&1.recipient_id == ctx.alice.id))
+
+      alert = view |> element("#correction-alert") |> render()
+      assert alert =~ "Alicia&#39;s name changed"
+      refute alert =~ giver.name
+      assert has_element?(view, "#correction-alert button", "Resend to Alicia's Secret Santa")
+
+      view
+      |> element("#correction-alert button", "Resend to Alicia's Secret Santa")
+      |> render_click()
+
+      wait_until_idle(view)
+
+      assert_email_sent(fn email ->
+        assert email.to == [{giver.name, giver.email}]
+        assert email.text_body =~ "you drew: Alicia."
+      end)
+    end
+
+    test "can be dismissed", ctx do
+      {:ok, view, _html} = live(ctx.conn, ~p"/exchanges/#{ctx.exchange}")
+
+      view |> element("#participant-#{ctx.alice.id} a", "Edit") |> render_click()
+      view |> form("#participant-form", participant: %{name: "Alicia"}) |> render_submit()
+      view |> element("#correction-alert button", "Dismiss") |> render_click()
+
+      refute has_element?(view, "#correction-alert")
+      assert_no_email_sent()
+    end
+
+    test "no alert when nothing changed or the exchange is open", ctx do
+      {:ok, view, _html} = live(ctx.conn, ~p"/exchanges/#{ctx.exchange}")
+      view |> element("#participant-#{ctx.alice.id} a", "Edit") |> render_click()
+      view |> form("#participant-form", participant: %{name: "Alice"}) |> render_submit()
+      refute has_element?(view, "#correction-alert")
+
+      open = exchange_fixture()
+      bob = participant_fixture(open, name: "Bob")
+      {:ok, view, _html} = live(ctx.conn, ~p"/exchanges/#{open}")
+      view |> element("#participant-#{bob.id} a", "Edit") |> render_click()
+      view |> form("#participant-form", participant: %{name: "Robert"}) |> render_submit()
+      refute has_element?(view, "#correction-alert")
     end
   end
 
