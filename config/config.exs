@@ -31,6 +31,10 @@ config :secret_santa, SecretSantaWeb.Endpoint,
 # at the `config/runtime.exs`.
 config :secret_santa, SecretSanta.Mailer, adapter: Swoosh.Adapters.Local
 
+# From address on assignment emails. Overridden by SMTP_FROM in prod
+# (config/runtime.exs); in dev and test nothing leaves the machine.
+config :secret_santa, :mail_from, "secret-santa@localhost"
+
 # Configure esbuild (the version is required)
 config :esbuild,
   version: "0.25.4",

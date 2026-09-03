@@ -21,6 +21,9 @@ defmodule SecretSantaWeb.ExchangeLive.Show do
      |> assign(:page_title, exchange.name)
      |> assign(:editing, nil)
      |> assign(:revealed, MapSet.new())
+     |> assign(:send_queue, [])
+     |> assign(:sending_now, nil)
+     |> assign(:send_tally, nil)
      |> assign_participant_form(%Participant{})
      |> reload()}
   end
@@ -159,6 +162,71 @@ defmodule SecretSantaWeb.ExchangeLive.Show do
 
     {:noreply, assign(socket, :revealed, revealed)}
   end
+
+  ## Sending
+
+  def handle_event("send-all", _params, socket) do
+    ids = socket.assigns.exchange |> Exchanges.unsent_participants() |> Enum.map(& &1.id)
+    {:noreply, start_sending(socket, ids)}
+  end
+
+  def handle_event("send-one", %{"id" => id}, socket) do
+    {:noreply, start_sending(socket, [String.to_integer(id)])}
+  end
+
+  # Sends go one at a time through the mailbox so the page re-renders
+  # between them: :send_next marks a row as sending, then {:send, id}
+  # actually delivers. A batch that is already running is left alone.
+  defp start_sending(%{assigns: %{sending_now: nil}} = socket, ids) when ids != [] do
+    send(self(), :send_next)
+    assign(socket, send_queue: ids, send_tally: %{ok: 0, error: 0})
+  end
+
+  defp start_sending(socket, _ids), do: socket
+
+  @impl true
+  def handle_info(:send_next, socket) do
+    case socket.assigns.send_queue do
+      [] ->
+        {:noreply, finish_sending(socket)}
+
+      [id | rest] ->
+        send(self(), {:send, id})
+        {:noreply, assign(socket, send_queue: rest, sending_now: id)}
+    end
+  end
+
+  def handle_info({:send, id}, socket) do
+    participant = find_participant!(socket.assigns.participants, Integer.to_string(id))
+    tally = socket.assigns.send_tally
+
+    tally =
+      case Exchanges.send_assignment(participant) do
+        {:ok, _} -> %{tally | ok: tally.ok + 1}
+        {:error, _} -> %{tally | error: tally.error + 1}
+      end
+
+    send(self(), :send_next)
+    {:noreply, socket |> assign(send_tally: tally) |> reload()}
+  end
+
+  defp finish_sending(socket) do
+    %{ok: ok, error: error} = socket.assigns.send_tally
+
+    message =
+      case {ok, error} do
+        {ok, 0} -> "Sent #{ok} #{plural(ok, "email")}."
+        {0, error} -> "#{error} #{plural(error, "email")} failed. See the status column."
+        {ok, error} -> "Sent #{ok}, #{error} failed. See the status column."
+      end
+
+    socket
+    |> put_flash(if(error == 0, do: :info, else: :error), message)
+    |> assign(sending_now: nil, send_tally: nil)
+  end
+
+  defp plural(1, word), do: word
+  defp plural(_, word), do: word <> "s"
 
   defp assign_participant_form(socket, %Participant{} = participant) do
     assign(socket, :form, to_form(Exchanges.change_participant(participant)))
@@ -336,10 +404,25 @@ defmodule SecretSantaWeb.ExchangeLive.Show do
       </section>
 
       <section :if={!@open?} id="assignments" class="space-y-4">
-        <h2 class="text-base font-semibold">Assignments</h2>
-        <p class="text-sm text-base-content/70">
-          Hidden so you don't spoil your own draw. Reveal a row only if you need to.
-        </p>
+        <div class="flex items-end justify-between gap-4">
+          <div>
+            <h2 class="text-base font-semibold">Assignments</h2>
+            <p class="text-sm text-base-content/70">
+              Hidden so you don't spoil your own draw. Reveal a row only if you need to.
+              Each person gets one plain-text email naming who they drew.
+            </p>
+          </div>
+          <.button
+            id="send-all-button"
+            variant="primary"
+            phx-click="send-all"
+            disabled={@sending_now != nil or unsent_count(@participants) == 0}
+          >
+            <.icon name="hero-paper-airplane" class="size-4" />
+            {if @sending_now, do: "Sending…", else: "Send all (#{unsent_count(@participants)} unsent)"}
+          </.button>
+        </div>
+
         <.table id="assignments-table" rows={@participants} row_id={&"assignment-#{&1.id}"}>
           <:col :let={p} label="Giver">{p.name}</:col>
           <:col :let={p} label="Drew">
@@ -350,9 +433,21 @@ defmodule SecretSantaWeb.ExchangeLive.Show do
               ••••••••
             </span>
           </:col>
+          <:col :let={p} label="Email">
+            <.send_status participant={p} sending={@sending_now == p.id} />
+          </:col>
           <:action :let={p}>
             <.link phx-click="toggle-reveal" phx-value-id={p.id} class="link">
               {if MapSet.member?(@revealed, p.id), do: "Hide", else: "Reveal"}
+            </.link>
+            <.link
+              :if={@sending_now == nil}
+              phx-click="send-one"
+              phx-value-id={p.id}
+              data-confirm={"Email #{p.name} their assignment#{if p.last_sent_at, do: " again"}?"}
+              class="link"
+            >
+              {if p.last_sent_at, do: "Resend", else: "Send"}
             </.link>
           </:action>
         </.table>
@@ -386,6 +481,40 @@ defmodule SecretSantaWeb.ExchangeLive.Show do
   defp describe({:no_legal_recipient, %Participant{name: name}}) do
     "#{name} has nobody left they are allowed to draw."
   end
+
+  attr :participant, Participant, required: true
+  attr :sending, :boolean, required: true
+
+  defp send_status(%{sending: true} = assigns) do
+    ~H"""
+    <span class="badge badge-info badge-sm">Sending…</span>
+    """
+  end
+
+  defp send_status(%{participant: %Participant{last_sent_at: %DateTime{}}} = assigns) do
+    ~H"""
+    <span class="text-success text-sm whitespace-nowrap">
+      Sent {Calendar.strftime(@participant.last_sent_at, "%Y-%m-%d %H:%M")}
+    </span>
+    """
+  end
+
+  defp send_status(%{participant: %Participant{last_error: error}} = assigns)
+       when is_binary(error) do
+    ~H"""
+    <span class="text-error text-sm" title={@participant.last_error}>
+      Failed: {String.slice(@participant.last_error, 0, 60)}
+    </span>
+    """
+  end
+
+  defp send_status(assigns) do
+    ~H"""
+    <span class="text-base-content/60 text-sm">Not sent</span>
+    """
+  end
+
+  defp unsent_count(participants), do: Enum.count(participants, &is_nil(&1.last_sent_at))
 
   defp recipient_name(participants, %Participant{recipient_id: recipient_id}) do
     case Enum.find(participants, &(&1.id == recipient_id)) do

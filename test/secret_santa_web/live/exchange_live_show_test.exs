@@ -276,6 +276,118 @@ defmodule SecretSantaWeb.ExchangeLive.ShowTest do
     end
   end
 
+  describe "sending" do
+    import Swoosh.TestAssertions
+
+    setup do
+      # The Test adapter notifies the sending process, which here is the
+      # LiveView; route notifications to the test instead.
+      Application.put_env(:swoosh, :shared_test_process, self())
+      on_exit(fn -> Application.delete_env(:swoosh, :shared_test_process) end)
+
+      exchange = exchange_fixture(name: "Family 2026")
+      alice = participant_fixture(exchange, name: "Alice", email: "alice@example.com")
+      bob = participant_fixture(exchange, name: "Bob", email: "bob@example.com")
+      carol = participant_fixture(exchange, name: "Carol", email: "carol@example.com")
+      {:ok, exchange} = Exchanges.draw_exchange(exchange)
+      %{exchange: exchange, alice: alice, bob: bob, carol: carol}
+    end
+
+    test "starts with everyone not sent", ctx do
+      {:ok, view, _html} = live(ctx.conn, ~p"/exchanges/#{ctx.exchange}")
+
+      assert view |> element("#assignment-#{ctx.alice.id}") |> render() =~ "Not sent"
+      assert view |> element("#send-all-button") |> render() =~ "Send all (3 unsent)"
+      refute has_element?(view, "#send-all-button[disabled]")
+    end
+
+    test "send all emails everyone unsent and updates each row", ctx do
+      {:ok, view, _html} = live(ctx.conn, ~p"/exchanges/#{ctx.exchange}")
+
+      view |> element("#send-all-button") |> render_click()
+      html = wait_until_idle(view)
+
+      assert_email_sent(to: {"Alice", "alice@example.com"})
+      assert_email_sent(to: {"Bob", "bob@example.com"})
+      assert_email_sent(to: {"Carol", "carol@example.com"})
+
+      assert html =~ "Sent 3 emails."
+      assert view |> element("#assignment-#{ctx.alice.id}") |> render() =~ "Sent 20"
+      assert view |> element("#send-all-button") |> render() =~ "Send all (0 unsent)"
+      assert has_element?(view, "#send-all-button[disabled]")
+      assert Enum.all?(Exchanges.list_participants(ctx.exchange), &(&1.last_sent_at != nil))
+    end
+
+    test "send all skips people already sent", ctx do
+      {:ok, _} = Exchanges.send_assignment(ctx.alice)
+      assert_email_sent(to: {"Alice", "alice@example.com"})
+      {:ok, view, _html} = live(ctx.conn, ~p"/exchanges/#{ctx.exchange}")
+
+      assert view |> element("#send-all-button") |> render() =~ "Send all (2 unsent)"
+      view |> element("#send-all-button") |> render_click()
+      wait_until_idle(view)
+
+      assert_email_sent(to: {"Bob", "bob@example.com"})
+      assert_email_sent(to: {"Carol", "carol@example.com"})
+      refute_email_sent(to: {"Alice", "alice@example.com"})
+    end
+
+    test "resend emails one person even if already sent", ctx do
+      {:ok, _} = Exchanges.send_assignment(ctx.alice)
+      assert_email_sent(to: {"Alice", "alice@example.com"})
+      {:ok, view, _html} = live(ctx.conn, ~p"/exchanges/#{ctx.exchange}")
+
+      assert view |> element("#assignment-#{ctx.alice.id} a", "Resend") |> render_click()
+      html = wait_until_idle(view)
+
+      assert html =~ "Sent 1 email."
+      assert_email_sent(to: {"Alice", "alice@example.com"})
+      refute_email_sent(to: {"Bob", "bob@example.com"})
+    end
+
+    test "a failed send shows on the row and stays unsent", ctx do
+      original = Application.get_env(:secret_santa, SecretSanta.Mailer)
+
+      Application.put_env(:secret_santa, SecretSanta.Mailer,
+        adapter: SecretSanta.FailingMailAdapter
+      )
+
+      on_exit(fn -> Application.put_env(:secret_santa, SecretSanta.Mailer, original) end)
+
+      {:ok, view, _html} = live(ctx.conn, ~p"/exchanges/#{ctx.exchange}")
+
+      view |> element("#assignment-#{ctx.bob.id} a", "Send") |> render_click()
+      html = wait_until_idle(view)
+
+      assert html =~ "1 email failed."
+      assert view |> element("#assignment-#{ctx.bob.id}") |> render() =~ "Failed: "
+      assert view |> element("#assignment-#{ctx.bob.id}") |> render() =~ "econnrefused"
+      assert view |> element("#send-all-button") |> render() =~ "Send all (3 unsent)"
+      assert_no_email_sent()
+    end
+
+    # Sends are driven by messages the LiveView posts to itself, so the
+    # click returns before the batch finishes.
+    defp wait_until_idle(view, attempts \\ 50) do
+      html = render(view)
+
+      cond do
+        not (html =~ "Sending…") and not (html =~ ~s(id="send-all-button" disabled)) ->
+          html
+
+        not (html =~ "Sending…") and html =~ "Send all (0 unsent)" ->
+          html
+
+        attempts == 0 ->
+          flunk("sending never finished")
+
+        true ->
+          Process.sleep(10)
+          wait_until_idle(view, attempts - 1)
+      end
+    end
+  end
+
   describe "a drawn exchange" do
     test "is read-only", %{conn: conn} do
       exchange = drawn_exchange_fixture(name: "Work 2025")
