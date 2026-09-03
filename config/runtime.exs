@@ -124,21 +124,43 @@ if config_env() == :prod do
       other -> raise "SMTP_TLS must be one of always, if_available, never; got #{inspect(other)}"
     end
 
-  smtp_tls_verify =
+  smtp_host = smtp_env.("SMTP_HOST")
+
+  # `verify: :verify_peer` on its own is not enough: OTP ships no default
+  # trust store, so ssl:connect refuses to start, and the STARTTLS upgrade
+  # happens on an already-open socket so OTP does not know which hostname
+  # to check against the certificate. Both have to be supplied explicitly
+  # (see the "TLS options" section of Swoosh.Adapters.SMTP's docs).
+  smtp_tls_options =
     case Dotenvy.env!("SMTP_TLS_VERIFY", :string, "peer") do
-      "peer" -> :verify_peer
-      "none" -> :verify_none
-      other -> raise "SMTP_TLS_VERIFY must be one of peer, none; got #{inspect(other)}"
+      "peer" ->
+        [
+          verify: :verify_peer,
+          cacerts: :public_key.cacerts_get(),
+          server_name_indication: String.to_charlist(smtp_host),
+          # OTP's default depth of 1 rejects chains with more than one
+          # intermediate, which public providers such as Gmail send.
+          depth: 5,
+          customize_hostname_check: [
+            match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
+          ]
+        ]
+
+      "none" ->
+        [verify: :verify_none]
+
+      other ->
+        raise "SMTP_TLS_VERIFY must be one of peer, none; got #{inspect(other)}"
     end
 
   config :secret_santa, SecretSanta.Mailer,
     adapter: Swoosh.Adapters.SMTP,
-    relay: smtp_env.("SMTP_HOST"),
+    relay: smtp_host,
     port: String.to_integer(smtp_env.("SMTP_PORT")),
     username: smtp_env.("SMTP_USERNAME"),
     password: smtp_env.("SMTP_PASSWORD"),
     tls: smtp_tls,
-    tls_options: [verify: smtp_tls_verify],
+    tls_options: smtp_tls_options,
     auth: :always,
     retries: 1
 
