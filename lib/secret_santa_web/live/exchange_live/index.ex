@@ -11,6 +11,7 @@ defmodule SecretSantaWeb.ExchangeLive.Index do
     {:ok,
      socket
      |> assign(:page_title, "Exchanges")
+     |> assign(:source, nil)
      |> assign_new_form()
      |> load_exchanges()}
   end
@@ -22,16 +23,37 @@ defmodule SecretSantaWeb.ExchangeLive.Index do
   end
 
   def handle_event("save", %{"exchange" => params}, socket) do
-    case Exchanges.create_exchange(params) do
+    {result, message} =
+      case socket.assigns.source do
+        nil ->
+          {Exchanges.create_exchange(params), "Now add some people."}
+
+        %Exchange{} = source ->
+          {Exchanges.clone_exchange(source, params),
+           "Copied everyone from #{source.name}; check the exclusions before drawing."}
+      end
+
+    case result do
       {:ok, exchange} ->
         {:noreply,
          socket
-         |> put_flash(:info, "Created #{exchange.name}. Now add some people.")
+         |> put_flash(:info, "Created #{exchange.name}. #{message}")
          |> push_navigate(to: ~p"/exchanges/#{exchange}")}
 
       {:error, changeset} ->
         {:noreply, assign(socket, :form, to_form(changeset))}
     end
+  end
+
+  def handle_event("clone", %{"id" => id}, socket) do
+    {:noreply,
+     socket
+     |> assign(:source, Exchanges.get_exchange!(id))
+     |> assign_new_form()}
+  end
+
+  def handle_event("cancel-clone", _params, socket) do
+    {:noreply, socket |> assign(:source, nil) |> assign_new_form()}
   end
 
   def handle_event("delete", %{"id" => id}, socket) do
@@ -64,10 +86,20 @@ defmodule SecretSantaWeb.ExchangeLive.Index do
       <.form for={@form} id="new-exchange-form" phx-change="validate" phx-submit="save">
         <div class="flex items-end gap-2">
           <div class="flex-1">
-            <.input field={@form[:name]} label="New exchange" placeholder="Family 2026" />
+            <.input
+              field={@form[:name]}
+              label={if @source, do: "New exchange from #{@source.name}", else: "New exchange"}
+              placeholder="Family 2026"
+            />
           </div>
           <.button variant="primary" phx-disable-with="Creating...">Create</.button>
+          <.button :if={@source} id="cancel-clone" type="button" phx-click="cancel-clone">
+            Cancel
+          </.button>
         </div>
+        <p :if={@source} id="clone-hint" class="text-sm text-base-content/70">
+          Participants and exclusions from {@source.name} will be copied. Nothing is drawn.
+        </p>
       </.form>
 
       <p :if={@exchanges == []} id="no-exchanges" class="text-base-content/60">
@@ -83,6 +115,9 @@ defmodule SecretSantaWeb.ExchangeLive.Index do
         <:col :let={exchange} label="Participants">{exchange.participant_count}</:col>
         <:col :let={exchange} label="Status"><.status exchange={exchange} /></:col>
         <:action :let={exchange}>
+          <.link phx-click="clone" phx-value-id={exchange.id} class="link whitespace-nowrap">
+            New from this
+          </.link>
           <.link
             phx-click="delete"
             phx-value-id={exchange.id}
