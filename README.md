@@ -31,8 +31,9 @@ Real email is only sent under prod config. The app still binds to
 `127.0.0.1` only; there is no authentication, so it must not be exposed
 beyond the machine.
 
-Set these environment variables (a `.env` file sourced by your shell works;
-`.env` is gitignored):
+Put these in a `.env` file in the project root (it is gitignored and loaded
+automatically under prod config; variables already in the environment take
+precedence over the file):
 
 | Variable          | Purpose                                                        |
 | ----------------- | -------------------------------------------------------------- |
@@ -53,6 +54,24 @@ Then:
 MIX_ENV=prod mix setup
 MIX_ENV=prod mix ecto.migrate
 MIX_ENV=prod mix phx.server
+```
+
+### Gmail
+
+Gmail's SMTP server accepts app passwords only, so turn on 2-Step
+Verification for the account and create one at
+<https://myaccount.google.com/apppasswords>. Gmail rewrites the From header
+to the authenticated account, so `SMTP_FROM` should be the same address.
+Gmail's certificate is publicly trusted, so leave verification on:
+
+```sh
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=you@gmail.com
+SMTP_PASSWORD=<the 16-character app password>
+SMTP_FROM=you@gmail.com
+SMTP_TLS=always
+SMTP_TLS_VERIFY=peer
 ```
 
 ### Proton Mail

@@ -40,5 +40,5 @@ npm-debug.log
 *.db-*
 
 
-# Local environment (SMTP credentials etc.), sourced by the shell
+# Local environment (SMTP credentials etc.), loaded by config/runtime.exs
 .env
