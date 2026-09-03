@@ -106,9 +106,17 @@ themselves; that rule is implicit and not stored.
 - "Delete" (per row, with confirmation) removes the exchange and everything
   under it. Allowed in either state.
 
-### 4.2 Managing participants (open exchanges only)
+### 4.2 Managing participants
 
-- Add a participant by name and email; edit or remove existing ones.
+- While the exchange is **open**: add a participant by name and email; edit
+  or remove existing ones.
+- After the exchange is **drawn**: a participant's name and email can still
+  be corrected, but nobody can be added or removed. A typo noticed after
+  "Send all" should cost one resend, not a redraw. After such an edit the
+  UI offers the relevant resend directly:
+  - email changed: resend to that participant;
+  - name changed: resend to whoever drew them (their email carried the old
+    name), without revealing who that is.
 - Validation, all enforced on save and surfaced inline:
   - name and email are required;
   - email passes a basic format check;
@@ -143,11 +151,13 @@ themselves; that rule is implicit and not stored.
   stamped, in one transaction.
 - If no valid assignment exists, nothing is written and the UI shows an error
   naming the participants involved where it can.
-- **Once drawn, an exchange is immutable.** Participants and exclusions
-  become read-only and there is no redraw. To change anything, the organizer
-  creates a new exchange (usually via "New from previous") and draws again.
-  The only actions left on a drawn exchange are revealing, sending, and
-  deleting.
+- **Once drawn, the draw is immutable.** The set of participants, the
+  exclusions, and the assignments are locked and there is no redraw. To
+  change any of those, the organizer creates a new exchange (usually via
+  "New from previous") and draws again. Correcting a participant's name or
+  email (§4.2) is the one edit still allowed, since it changes nothing about
+  who drew whom. Otherwise the only actions left on a drawn exchange are
+  revealing, sending, and deleting.
 
 ### 4.5 Viewing assignments (drawn exchanges)
 
@@ -184,9 +194,11 @@ themselves; that rule is implicit and not stored.
 These were considered and rejected for now. They are listed so a future change
 knows it is reversing a decision rather than filling a gap.
 
-- **Redraw / editing after draw.** Rejected in favor of immutability plus
-  "New from previous". Keeps every drawn exchange an honest record of what was
-  emailed.
+- **Redraw / changing the group after draw.** Rejected in favor of
+  immutability plus "New from previous". Keeps every drawn exchange an honest
+  record of what was emailed. (Correcting a name or email after the draw was
+  originally rejected too, then allowed once the "typo found after Send all"
+  case came up; see §4.2.)
 - **Mutual exclusions.** One-directional was chosen for precision; a "make
   mutual" shortcut could be added on top without changing the data model.
 - **Auto-excluding last year's recipient** when cloning. Easy to add later as
