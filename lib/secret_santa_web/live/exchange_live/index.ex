@@ -12,6 +12,7 @@ defmodule SecretSantaWeb.ExchangeLive.Index do
      socket
      |> assign(:page_title, "Exchanges")
      |> assign(:source, nil)
+     |> assign(:clone_form, nil)
      |> assign_new_form()
      |> load_exchanges()}
   end
@@ -23,21 +24,11 @@ defmodule SecretSantaWeb.ExchangeLive.Index do
   end
 
   def handle_event("save", %{"exchange" => params}, socket) do
-    {result, message} =
-      case socket.assigns.source do
-        nil ->
-          {Exchanges.create_exchange(params), "Now add some people."}
-
-        %Exchange{} = source ->
-          {Exchanges.clone_exchange(source, params),
-           "Copied everyone from #{source.name}; check the exclusions before drawing."}
-      end
-
-    case result do
+    case Exchanges.create_exchange(params) do
       {:ok, exchange} ->
         {:noreply,
          socket
-         |> put_flash(:info, "Created #{exchange.name}. #{message}")
+         |> put_flash(:info, "Created #{exchange.name}. Now add some people.")
          |> push_navigate(to: ~p"/exchanges/#{exchange}")}
 
       {:error, changeset} ->
@@ -46,14 +37,38 @@ defmodule SecretSantaWeb.ExchangeLive.Index do
   end
 
   def handle_event("clone", %{"id" => id}, socket) do
+    source = Exchanges.get_exchange!(id)
+
     {:noreply,
-     socket
-     |> assign(:source, Exchanges.get_exchange!(id))
-     |> assign_new_form()}
+     socket |> assign(:source, source) |> assign_clone_form(%{name: "#{source.name} Copy"})}
   end
 
   def handle_event("cancel-clone", _params, socket) do
-    {:noreply, socket |> assign(:source, nil) |> assign_new_form()}
+    {:noreply, socket |> assign(:source, nil) |> assign(:clone_form, nil)}
+  end
+
+  def handle_event("validate-clone", %{"exchange" => params}, socket) do
+    changeset = Exchanges.change_exchange(%Exchange{}, params)
+    {:noreply, assign(socket, :clone_form, to_form(changeset, id: "clone", action: :validate))}
+  end
+
+  def handle_event("save-clone", %{"exchange" => params}, socket) do
+    source = socket.assigns.source
+
+    case Exchanges.clone_exchange(source, params) do
+      {:ok, exchange} ->
+        {:noreply,
+         socket
+         |> put_flash(
+           :info,
+           "Created #{exchange.name} with everyone from #{source.name}. " <>
+             "Check the exclusions before drawing."
+         )
+         |> push_navigate(to: ~p"/exchanges/#{exchange}")}
+
+      {:error, changeset} ->
+        {:noreply, assign(socket, :clone_form, to_form(changeset, id: "clone"))}
+    end
   end
 
   def handle_event("delete", %{"id" => id}, socket) do
@@ -68,6 +83,14 @@ defmodule SecretSantaWeb.ExchangeLive.Index do
 
   defp assign_new_form(socket) do
     assign(socket, :form, to_form(Exchanges.change_exchange(%Exchange{})))
+  end
+
+  defp assign_clone_form(socket, attrs) do
+    assign(
+      socket,
+      :clone_form,
+      to_form(Exchanges.change_exchange(%Exchange{}, attrs), id: "clone")
+    )
   end
 
   defp load_exchanges(socket) do
@@ -86,20 +109,10 @@ defmodule SecretSantaWeb.ExchangeLive.Index do
       <.form for={@form} id="new-exchange-form" phx-change="validate" phx-submit="save">
         <div class="flex items-end gap-2">
           <div class="flex-1">
-            <.input
-              field={@form[:name]}
-              label={if @source, do: "New exchange from #{@source.name}", else: "New exchange"}
-              placeholder="Family 2026"
-            />
+            <.input field={@form[:name]} label="New exchange" placeholder="Family 2026" />
           </div>
           <.button variant="primary" phx-disable-with="Creating...">Create</.button>
-          <.button :if={@source} id="cancel-clone" type="button" phx-click="cancel-clone">
-            Cancel
-          </.button>
         </div>
-        <p :if={@source} id="clone-hint" class="text-sm text-base-content/70">
-          Participants and exclusions from {@source.name} will be copied. Nothing is drawn.
-        </p>
       </.form>
 
       <p :if={@exchanges == []} id="no-exchanges" class="text-base-content/60">
@@ -128,7 +141,39 @@ defmodule SecretSantaWeb.ExchangeLive.Index do
           </.link>
         </:action>
       </.table>
+
+      <.clone_modal :if={@source} source={@source} form={@clone_form} />
     </Layouts.app>
+    """
+  end
+
+  attr :source, Exchange, required: true
+  attr :form, Phoenix.HTML.Form, required: true
+
+  defp clone_modal(assigns) do
+    ~H"""
+    <dialog
+      id="clone-modal"
+      class="modal modal-open"
+      phx-window-keydown="cancel-clone"
+      phx-key="Escape"
+    >
+      <div class="modal-box space-y-4">
+        <h3 class="text-lg font-semibold">New exchange from {@source.name}</h3>
+        <p class="text-sm text-base-content/70">
+          Everyone in {@source.name} and their exclusions will be copied into a new, undrawn
+          exchange. {@source.name} itself is not changed.
+        </p>
+        <.form for={@form} id="clone-form" phx-change="validate-clone" phx-submit="save-clone">
+          <.input field={@form[:name]} label="Name" phx-mounted={JS.focus()} />
+          <div class="modal-action">
+            <.button type="button" phx-click="cancel-clone">Cancel</.button>
+            <.button variant="primary" phx-disable-with="Creating...">Create</.button>
+          </div>
+        </.form>
+      </div>
+      <div class="modal-backdrop" phx-click="cancel-clone"></div>
+    </dialog>
     """
   end
 
