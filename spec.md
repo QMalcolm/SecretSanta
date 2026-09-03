@@ -36,8 +36,9 @@ drew.
 
 ### 2.1 SMTP configuration
 
-All of the following are read at boot from the environment (a `.env` file
-loaded by the user's shell is fine):
+All of the following are read at boot from a `.env` file in the project root,
+falling back to the process environment (which takes precedence when both are
+set):
 
 | Variable        | Purpose                                            |
 | --------------- | -------------------------------------------------- |

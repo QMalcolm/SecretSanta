@@ -24,8 +24,17 @@ config :secret_santa, SecretSantaWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
 if config_env() == :prod do
+  # Read `.env` from the project root so `MIX_ENV=prod mix phx.server` works
+  # without first exporting anything from the shell. Dotenvy keeps the values
+  # in its own store rather than the OS environment, so everything below
+  # reads through `Dotenvy.env!/3`. Real environment variables are sourced
+  # last and therefore win over the file; a missing `.env` is fine.
+  Dotenvy.source!([".env", System.get_env()])
+
+  env = fn name -> Dotenvy.env!(name, :string, nil) end
+
   database_path =
-    System.get_env("DATABASE_PATH") ||
+    env.("DATABASE_PATH") ||
       raise """
       environment variable DATABASE_PATH is missing.
       For example: /etc/secret_santa/secret_santa.db
@@ -33,7 +42,7 @@ if config_env() == :prod do
 
   config :secret_santa, SecretSanta.Repo,
     database: database_path,
-    pool_size: String.to_integer(System.get_env("POOL_SIZE") || "5")
+    pool_size: Dotenvy.env!("POOL_SIZE", :integer, 5)
 
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you
@@ -41,16 +50,16 @@ if config_env() == :prod do
   # to check this value into version control, so we use an environment
   # variable instead.
   secret_key_base =
-    System.get_env("SECRET_KEY_BASE") ||
+    env.("SECRET_KEY_BASE") ||
       raise """
       environment variable SECRET_KEY_BASE is missing.
       You can generate one by calling: mix phx.gen.secret
       """
 
-  host = System.get_env("PHX_HOST") || "localhost"
-  port = String.to_integer(System.get_env("PORT", "4000"))
+  host = Dotenvy.env!("PHX_HOST", :string, "localhost")
+  port = Dotenvy.env!("PORT", :integer, 4000)
 
-  config :secret_santa, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
+  config :secret_santa, :dns_cluster_query, env.("DNS_CLUSTER_QUERY")
 
   # This app is only ever run on the organizer's own machine (spec.md §1,
   # §2), so even in prod it listens on loopback only and generates plain
@@ -100,7 +109,7 @@ if config_env() == :prod do
   # settings come from the environment so no credentials land on disk in
   # the database. See spec.md §2.1.
   smtp_env = fn name ->
-    System.get_env(name) ||
+    env.(name) ||
       raise """
       environment variable #{name} is missing.
       See spec.md §2.1 for the SMTP variables the app expects.
@@ -108,7 +117,7 @@ if config_env() == :prod do
   end
 
   smtp_tls =
-    case System.get_env("SMTP_TLS", "if_available") do
+    case Dotenvy.env!("SMTP_TLS", :string, "if_available") do
       "always" -> :always
       "if_available" -> :if_available
       "never" -> :never
@@ -116,7 +125,7 @@ if config_env() == :prod do
     end
 
   smtp_tls_verify =
-    case System.get_env("SMTP_TLS_VERIFY", "peer") do
+    case Dotenvy.env!("SMTP_TLS_VERIFY", :string, "peer") do
       "peer" -> :verify_peer
       "none" -> :verify_none
       other -> raise "SMTP_TLS_VERIFY must be one of peer, none; got #{inspect(other)}"

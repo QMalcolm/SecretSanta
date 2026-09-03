@@ -31,8 +31,9 @@ Real email is only sent under prod config. The app still binds to
 `127.0.0.1` only; there is no authentication, so it must not be exposed
 beyond the machine.
 
-Set these environment variables (a `.env` file sourced by your shell works;
-`.env` is gitignored):
+Put these in a `.env` file in the project root (it is gitignored and loaded
+automatically under prod config; variables already in the environment take
+precedence over the file):
 
 | Variable          | Purpose                                                        |
 | ----------------- | -------------------------------------------------------------- |
